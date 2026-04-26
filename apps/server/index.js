@@ -20,6 +20,8 @@ const VALID_TOKENS = {
 
 // 内存 session
 const sessions = {};
+// Token Exchange 生成的临时 code
+const exchangeCodes = {};
 
 function parseCookies(cookieHeader) {
   const cookies = {};
@@ -54,7 +56,15 @@ function getUserInfo(token) {
   return null;
 }
 
-// OAuth2 授权端点 — GET
+function findClientByToken(token) {
+  for (const [id, info] of Object.entries(VALID_TOKENS)) {
+    if (token === info) return id;
+  }
+  return null;
+}
+
+// ===== OAuth2 Authorization Endpoints =====
+
 app.get('/oauth/authorize', (req, res) => {
   const { client_id, redirect_uri, response_type, state } = req.query;
 
@@ -68,7 +78,6 @@ app.get('/oauth/authorize', (req, res) => {
 
   const cookies = parseCookies(req.headers.cookie || '');
 
-  // 已有 session → 自动放行（SSO）
   if (cookies.sso_session && sessions[cookies.sso_session]) {
     const redirectUrl = new URL(redirect_uri);
     redirectUrl.searchParams.set('code', VALID_CODE);
@@ -76,7 +85,6 @@ app.get('/oauth/authorize', (req, res) => {
     return res.redirect(redirectUrl.toString());
   }
 
-  // 无 session → 显示登录表单
   res.send(`
 <!DOCTYPE html>
 <html>
@@ -111,7 +119,6 @@ app.get('/oauth/authorize', (req, res) => {
   `);
 });
 
-// OAuth2 授权端点 — POST（登录表单提交）
 app.post('/oauth/authorize', (req, res) => {
   const { client_id, redirect_uri, state, username, password } = req.body;
 
@@ -119,7 +126,6 @@ app.post('/oauth/authorize', (req, res) => {
     return res.status(401).send('用户名或密码错误');
   }
 
-  // 创建 session
   const sessionId = crypto.randomUUID();
   sessions[sessionId] = { username, loggedInAt: Date.now() };
 
@@ -130,15 +136,43 @@ app.post('/oauth/authorize', (req, res) => {
   res.cookie('sso_session', sessionId, {
     httpOnly: true,
     sameSite: 'lax',
-    maxAge: 24 * 60 * 60 * 1000, // 24h
+    maxAge: 24 * 60 * 60 * 1000,
   });
   res.redirect(redirectUrl.toString());
 });
 
-// Token 端点
-app.post('/oauth/token', (req, res) => {
-  const { grant_type, code, client_id, client_secret, redirect_uri } = req.body;
+// ===== OAuth2 Token Endpoint =====
 
+app.post('/oauth/token', (req, res) => {
+  const { grant_type, code, client_id, client_secret, redirect_uri,
+          subject_token, requested_token_audience } = req.body;
+
+  // Token Exchange: 用已有 token 换取子应用域的临时 code
+  if (grant_type === 'urn:ietf:params:oauth:grant-type:token-exchange') {
+    const clientId = findClientByToken(subject_token);
+    if (!clientId) {
+      return res.status(400).json({ error: 'invalid_token' });
+    }
+
+    if (!requested_token_audience || !CLIENTS[requested_token_audience]) {
+      return res.status(400).json({ error: 'invalid_audience' });
+    }
+
+    // 生成短期 code，只能被目标 client 使用
+    const exchangeCode = 'exchange-code-' + crypto.randomUUID();
+    exchangeCodes[exchangeCode] = {
+      client_id: requested_token_audience,
+      created_at: Date.now(),
+      ttl: 300000, // 5 分钟
+    };
+
+    return res.json({
+      code: exchangeCode,
+      expires_in: 300,
+    });
+  }
+
+  // 标准 Authorization Code 换 Token
   if (grant_type !== 'authorization_code') {
     return res.status(400).json({ error: 'unsupported_grant_type' });
   }
@@ -152,8 +186,22 @@ app.post('/oauth/token', (req, res) => {
     return res.status(400).json({ error: 'invalid_client_secret' });
   }
 
-  if (code !== VALID_CODE) {
+  // 支持两种 code：标准 OAuth2 code 和 Token Exchange code
+  if (code !== VALID_CODE && !exchangeCodes[code]) {
     return res.status(400).json({ error: 'invalid_grant' });
+  }
+
+  // 如果是 exchange code，验证目标 client
+  if (exchangeCodes[code]) {
+    const exchange = exchangeCodes[code];
+    if (exchange.client_id !== client_id) {
+      return res.status(400).json({ error: 'invalid_grant' });
+    }
+    if (Date.now() - exchange.created_at > exchange.ttl) {
+      delete exchangeCodes[code];
+      return res.status(400).json({ error: 'code_expired' });
+    }
+    delete exchangeCodes[code];
   }
 
   res.json({
@@ -164,7 +212,8 @@ app.post('/oauth/token', (req, res) => {
   });
 });
 
-// 获取用户信息
+// ===== OAuth2 UserInfo =====
+
 app.get('/oauth/userinfo', (req, res) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -180,7 +229,6 @@ app.get('/oauth/userinfo', (req, res) => {
   res.json(userInfo);
 });
 
-// 登出
 app.post('/oauth/logout', (req, res) => {
   const cookies = parseCookies(req.headers.cookie || '');
   if (cookies.sso_session) {
@@ -190,9 +238,102 @@ app.post('/oauth/logout', (req, res) => {
   res.json({ ok: true });
 });
 
+// ===== Master 后端 API =====
+
+app.post('/api/auth/callback', (req, res) => {
+  const { code } = req.body;
+  if (!code) return res.status(400).json({ error: 'missing_code' });
+
+  // Master 后端用 master_secret 换 token（模拟内部调用 SSO）
+  const client = CLIENTS['master-app'];
+  if (code !== VALID_CODE) {
+    return res.status(400).json({ error: 'invalid_grant' });
+  }
+
+  res.json({
+    access_token: VALID_TOKENS['master-app'],
+    token_type: 'Bearer',
+    expires_in: 3600,
+    userInfo: getUserInfo(VALID_TOKENS['master-app']),
+  });
+});
+
+// Master 后端：用 master_token 换取子应用的临时 code
+app.post('/api/auth/slave-code', (req, res) => {
+  const { master_token } = req.body;
+  if (!master_token) return res.status(400).json({ error: 'missing_token' });
+
+  const clientId = findClientByToken(master_token);
+  if (!clientId || clientId !== 'master-app') {
+    return res.status(400).json({ error: 'invalid_token' });
+  }
+
+  // 生成 slave-client 域下的临时 code
+  const exchangeCode = 'exchange-code-' + crypto.randomUUID();
+  exchangeCodes[exchangeCode] = {
+    client_id: 'slave-client',
+    created_at: Date.now(),
+    ttl: 300000,
+  };
+
+  res.json({ code: exchangeCode, expires_in: 300 });
+});
+
+// Master 后端：获取用户信息（同域）
+app.get('/api/auth/userinfo', (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'invalid_token' });
+  }
+
+  const token = authHeader.slice(7);
+  const userInfo = getUserInfo(token);
+  if (!userInfo) {
+    return res.status(401).json({ error: 'invalid_token' });
+  }
+
+  res.json(userInfo);
+});
+
+// ===== Slave 后端 API =====
+
+app.post('/api/slave/auth/callback', (req, res) => {
+  const { code } = req.body;
+  if (!code) return res.status(400).json({ error: 'missing_code' });
+
+  const client = CLIENTS['slave-client'];
+
+  // 支持两种 code：标准 OAuth2 code 和 Token Exchange code
+  if (code !== VALID_CODE && !exchangeCodes[code]) {
+    return res.status(400).json({ error: 'invalid_grant' });
+  }
+
+  if (exchangeCodes[code]) {
+    const exchange = exchangeCodes[code];
+    if (exchange.client_id !== 'slave-client') {
+      return res.status(400).json({ error: 'invalid_grant' });
+    }
+    if (Date.now() - exchange.created_at > exchange.ttl) {
+      delete exchangeCodes[code];
+      return res.status(400).json({ error: 'code_expired' });
+    }
+    delete exchangeCodes[code];
+  }
+
+  res.json({
+    access_token: VALID_TOKENS['slave-client'],
+    token_type: 'Bearer',
+    expires_in: 3600,
+    userInfo: getUserInfo(VALID_TOKENS['slave-client']),
+  });
+});
+
 app.listen(PORT, () => {
   console.log(`OAuth2 模拟服务端已启动: http://localhost:${PORT}`);
   console.log(`授权端点: http://localhost:${PORT}/oauth/authorize`);
   console.log(`Token 端点: http://localhost:${PORT}/oauth/token`);
+  console.log(`Token Exchange: http://localhost:${PORT}/oauth/token (grant_type=token_exchange)`);
+  console.log(`Master API: http://localhost:${PORT}/api/auth/*`);
+  console.log(`Slave API: http://localhost:${PORT}/api/slave/auth/*`);
   console.log(`支持的客户端: ${Object.keys(CLIENTS).join(', ')}`);
 });

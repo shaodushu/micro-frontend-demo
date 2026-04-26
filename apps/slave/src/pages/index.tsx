@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   getToken, getUserInfo, setToken, setUserInfo,
   getTenantName, getProjectSpace, setEmbeddedProps,
@@ -15,6 +15,8 @@ export default function SlaveIndexPage() {
   const [tenantName, setTenantName] = useState<string | undefined>(getTenantName());
   const [projectSpace, setProjectSpace] = useState<string | undefined>(getProjectSpace());
   const [embedded] = useState(isEmbedded());
+  const [authLoading, setAuthLoading] = useState(false);
+  const authSentRef = useRef(false);
 
   // 监听主应用 postMessage
   useEffect(() => {
@@ -37,11 +39,55 @@ export default function SlaveIndexPage() {
     return () => window.removeEventListener('message', onMessage);
   }, [embedded]);
 
-  // 初始化：处理 URL token 或触发 OAuth2
+  // 处理 code（从 URL 或 postMessage 获取）→ 调自己后端换 token
+  const exchangeCode = useCallback(async (code: string) => {
+    setAuthLoading(true);
+    try {
+      const res = await fetch('/api/slave/auth/callback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'exchange_failed');
+      }
+
+      const data = await res.json();
+      setToken(data.access_token);
+      setUserInfo(data.userInfo);
+      setTokenState(data.access_token);
+      setUserInfoState(data.userInfo);
+    } catch (e) {
+      console.error('Token exchange failed:', e);
+    } finally {
+      setAuthLoading(false);
+    }
+  }, []);
+
+  // 监听主应用发来的 code
+  useEffect(() => {
+    if (!embedded) return;
+
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== 'http://localhost:8002') return;
+      const { source, type, code } = event.data;
+      if (source === 'master-app' && type === 'MASTER_SLAVE_CODE' && code) {
+        exchangeCode(code);
+      }
+    };
+
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [embedded, exchangeCode]);
+
+  // 初始化
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const tokenFromUrl = params.get('token');
     const userInfoRaw = params.get('userInfo');
+    const codeFromUrl = params.get('code');
 
     if (tokenFromUrl) {
       setToken(tokenFromUrl);
@@ -57,13 +103,32 @@ export default function SlaveIndexPage() {
       return;
     }
 
+    // URL 带 code（Token Exchange 的 fallback）
+    if (codeFromUrl) {
+      exchangeCode(codeFromUrl);
+      window.history.replaceState({}, '', window.location.pathname);
+      return;
+    }
+
     if (!token) {
-      const authUrl = new URL(`${OAUTH2_SERVER}/oauth/authorize`);
-      authUrl.searchParams.set('client_id', CLIENT_ID);
-      authUrl.searchParams.set('redirect_uri', CALLBACK_URL);
-      authUrl.searchParams.set('response_type', 'code');
-      authUrl.searchParams.set('state', JSON.stringify({ from: 'slave', redirect: window.location.href }));
-      window.location.href = authUrl.toString();
+      if (embedded) {
+        // 嵌入模式：通知主应用代为认证（不发 OAuth2 跳转）
+        if (!authSentRef.current) {
+          authSentRef.current = true;
+          window.parent.postMessage(
+            { type: 'SLAVE_NEED_AUTH', source: 'slave-app' },
+            'http://localhost:8002',
+          );
+        }
+      } else {
+        // 独立模式：正常 OAuth2 跳转
+        const authUrl = new URL(`${OAUTH2_SERVER}/oauth/authorize`);
+        authUrl.searchParams.set('client_id', CLIENT_ID);
+        authUrl.searchParams.set('redirect_uri', CALLBACK_URL);
+        authUrl.searchParams.set('response_type', 'code');
+        authUrl.searchParams.set('state', JSON.stringify({ from: 'slave', redirect: window.location.href }));
+        window.location.href = authUrl.toString();
+      }
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -74,13 +139,20 @@ export default function SlaveIndexPage() {
         { type: 'SLAVE_READY', source: 'slave-app' },
         'http://localhost:8002',
       );
-      // 请求主应用发送租户/项目空间配置
       window.parent.postMessage(
         { type: 'SLAVE_REQUEST_CONFIG', source: 'slave-app' },
         'http://localhost:8002',
       );
     }
   }, [embedded, token]);
+
+  if (!token && authLoading) {
+    return (
+      <div style={{ padding: 40, textAlign: 'center', color: '#999' }}>
+        <p>正在获取登录信息...</p>
+      </div>
+    );
+  }
 
   if (!token) return null;
 

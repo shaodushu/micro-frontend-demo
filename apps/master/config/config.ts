@@ -11,4 +11,10 @@ export default defineConfig({
   ],
   history: { type: 'browser' },
   title: '主应用',
+  proxy: {
+    '/api/': {
+      target: 'http://localhost:9000',
+      changeOrigin: true,
+    },
+  },
 });

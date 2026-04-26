@@ -13,4 +13,10 @@ export default defineConfig({
   history: { type: 'browser' },
   title: '子应用',
   mfsu: false,
+  proxy: {
+    '/api/slave/': {
+      target: 'http://localhost:9000',
+      changeOrigin: true,
+    },
+  },
 });

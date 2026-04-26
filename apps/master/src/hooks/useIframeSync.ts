@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 export interface SlaveMessage {
-  type: 'SLAVE_READY' | 'SLAVE_TOKEN' | 'SLAVE_REQUEST_CONFIG' | 'SLAVE_NAV';
+  type: 'SLAVE_READY' | 'SLAVE_TOKEN' | 'SLAVE_REQUEST_CONFIG' | 'SLAVE_NAV' | 'SLAVE_NEED_AUTH';
   slaveToken?: string;
   slaveUserInfo?: Record<string, string>;
   path?: string;
@@ -14,6 +14,7 @@ export function useIframeSync(tenantName: string, projectSpace: string) {
   const [slaveReady, setSlaveReady] = useState(false);
   const [slaveToken, setSlaveToken] = useState<string | null>(null);
   const [slavePath, setSlavePath] = useState<string>('/');
+  const [slaveNeedAuth, setSlaveNeedAuth] = useState(false);
 
   const sendToSlave = useCallback((data: Record<string, unknown>) => {
     if (iframeRef.current?.contentWindow) {
@@ -43,6 +44,9 @@ export function useIframeSync(tenantName: string, projectSpace: string) {
     if (type === 'SLAVE_NAV' && path) {
       setSlavePath(path);
     }
+    if (type === 'SLAVE_NEED_AUTH') {
+      setSlaveNeedAuth(true);
+    }
   }, [sendToSlave, tenantName, projectSpace]);
 
   const onIframeLoad = useCallback(() => {
@@ -54,12 +58,13 @@ export function useIframeSync(tenantName: string, projectSpace: string) {
     return () => window.removeEventListener('message', handleMessage);
   }, [handleMessage]);
 
-  // 租户/项目空间变更时通知 iframe
   useEffect(() => {
     if (slaveReady) {
       sendToSlave({ type: 'MASTER_CONFIG_UPDATE', tenantName, projectSpace });
     }
   }, [tenantName, projectSpace, slaveReady, sendToSlave]);
 
-  return { iframeRef, slaveReady, slaveToken, slavePath, onIframeLoad, sendToSlave };
+  const resetNeedAuth = useCallback(() => setSlaveNeedAuth(false), []);
+
+  return { iframeRef, slaveReady, slaveToken, slavePath, slaveNeedAuth, resetNeedAuth, onIframeLoad, sendToSlave };
 }

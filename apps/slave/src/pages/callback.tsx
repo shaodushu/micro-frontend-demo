@@ -1,11 +1,6 @@
 import { useEffect, useState } from 'react';
 import { setToken, setUserInfo } from '@/utils/auth';
 
-const OAUTH2_SERVER = 'http://localhost:9000';
-const CLIENT_ID = 'slave-client';
-const CLIENT_SECRET = 'slave-secret';
-const CALLBACK_URL = 'http://localhost:8001/slave/callback';
-
 export default function CallbackPage() {
   const [error, setError] = useState('');
 
@@ -25,32 +20,22 @@ export default function CallbackPage() {
       if (parsed.redirect) redirectAfter = parsed.redirect;
     } catch {}
 
-    fetch(`${OAUTH2_SERVER}/oauth/token`, {
+    // 调自己后端换 token（同域 ✅）
+    fetch('/api/slave/auth/callback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        grant_type: 'authorization_code',
-        code,
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-        redirect_uri: CALLBACK_URL,
-      }),
+      body: JSON.stringify({ code }),
     })
       .then(async (res) => {
-        if (!res.ok) throw new Error('token_exchange_failed');
-        const data = await res.json();
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'token_exchange_failed');
+        }
+        return res.json();
+      })
+      .then((data) => {
         setToken(data.access_token);
-
-        // 获取用户信息
-        try {
-          const userRes = await fetch(`${OAUTH2_SERVER}/oauth/userinfo`, {
-            headers: { Authorization: `Bearer ${data.access_token}` },
-          });
-          if (userRes.ok) {
-            const userData = await userRes.json();
-            setUserInfo(userData);
-          }
-        } catch {}
+        setUserInfo(data.userInfo);
 
         if (redirectAfter) {
           window.location.href = redirectAfter;

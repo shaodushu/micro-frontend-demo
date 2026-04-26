@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { history } from 'umi';
-import { isLoggedIn, getAppConfig } from '@/utils/auth';
+import { isLoggedIn, getToken, getAppConfig } from '@/utils/auth';
 import { useIframeSync } from '@/hooks/useIframeSync';
 
 export default function SlavePage() {
@@ -13,7 +13,38 @@ export default function SlavePage() {
   const { tenantName: initialTenant, projectSpace: initialProject } = getAppConfig();
   const [tenantName, setTenantName] = useState(initialTenant);
   const [projectSpace, setProjectSpace] = useState(initialProject);
-  const { iframeRef, slaveReady, slavePath, onIframeLoad } = useIframeSync(tenantName, projectSpace);
+  const {
+    iframeRef, slaveReady, slavePath, slaveNeedAuth, resetNeedAuth,
+    onIframeLoad, sendToSlave,
+  } = useIframeSync(tenantName, projectSpace);
+
+  const processingRef = useRef(false);
+
+  // 处理 SLAVE_NEED_AUTH：调后端换 code → 发给 iframe
+  useEffect(() => {
+    if (!slaveNeedAuth || processingRef.current) return;
+    processingRef.current = true;
+
+    const masterToken = getToken();
+    if (!masterToken) return;
+
+    fetch('/api/auth/slave-code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ master_token: masterToken }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.code) {
+          sendToSlave({ type: 'MASTER_SLAVE_CODE', code: data.code });
+        }
+      })
+      .catch(console.error)
+      .finally(() => {
+        processingRef.current = false;
+        resetNeedAuth();
+      });
+  }, [slaveNeedAuth, resetNeedAuth, sendToSlave]);
 
   useEffect(() => {
     const onConfigUpdate = () => {

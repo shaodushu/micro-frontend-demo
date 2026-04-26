@@ -1,0 +1,15 @@
+{
+  "name": "umi-qiankun-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n server,slave,master -c yellow,green,blue \"pnpm dev:server\" \"pnpm dev:slave\" \"pnpm dev:master\"",
+    "dev:server": "cd apps/server && node index.js",
+    "dev:slave": "cd apps/slave && pnpm dev",
+    "dev:master": "cd apps/master && pnpm dev",
+    "build": "cd apps/master && pnpm build && cd ../slave && pnpm build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}

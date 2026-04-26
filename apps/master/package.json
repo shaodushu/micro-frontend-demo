@@ -1,5 +1,5 @@
 {
-  "name": "umi-qiankun-master",
+  "name": "master-app",
   "version": "1.0.0",
   "private": true,
   "scripts": {
@@ -8,7 +8,6 @@
     "start": "npm run dev"
   },
   "dependencies": {
-    "@umijs/plugins": "^4.4.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "umi": "^4.4.0"

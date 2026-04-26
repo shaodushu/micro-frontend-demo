@@ -1,5 +1,8 @@
-const TOKEN_KEY = 'umi_qiankun_token';
-const USER_KEY = 'umi_qiankun_user';
+import { defaultAppConfig } from '@/config/app';
+
+const TOKEN_KEY = 'master_token';
+const USER_KEY = 'master_user';
+const APP_CONFIG_KEY = 'master_app_config';
 
 export interface UserInfo {
   sub: string;
@@ -46,4 +49,23 @@ export function logout(): void {
   removeToken();
   removeUserInfo();
   window.location.href = '/login';
+}
+
+export function getAppConfig(): { tenantName: string; projectSpace: string } {
+  try {
+    const data = localStorage.getItem(APP_CONFIG_KEY);
+    if (data) {
+      const parsed = JSON.parse(data);
+      return {
+        tenantName: parsed.tenantName || defaultAppConfig.tenantName,
+        projectSpace: parsed.projectSpace || defaultAppConfig.projectSpace,
+      };
+    }
+  } catch {}
+  return { ...defaultAppConfig };
+}
+
+export function setAppConfig(config: { tenantName: string; projectSpace: string }): void {
+  localStorage.setItem(APP_CONFIG_KEY, JSON.stringify(config));
+  window.dispatchEvent(new CustomEvent('app-config-update'));
 }

@@ -4,12 +4,11 @@ export default defineConfig({
   npmClient: 'pnpm',
   base: '/slave',
   publicPath: '/slave/',
-  plugins: ['@umijs/plugins/dist/qiankun'],
-  qiankun: {
-    slave: {},
-  },
   routes: [
     { path: '/', component: 'index' },
+    { path: '/list', component: 'list' },
+    { path: '/detail', component: 'detail' },
+    { path: '/callback', component: 'callback', layout: false },
   ],
   history: { type: 'browser' },
   title: '子应用',

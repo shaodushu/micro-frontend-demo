@@ -1,18 +1,60 @@
 const express = require('express');
 const cors = require('cors');
+const crypto = require('crypto');
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 const PORT = 9000;
-const CLIENT_ID = 'umi-qiankun-client';
-const CLIENT_SECRET = 'umi-qiankun-secret';
+const CLIENTS = {
+  'master-app': { secret: 'master-secret' },
+  'slave-client': { secret: 'slave-secret' },
+};
 const VALID_CODE = 'mock-auth-code-123';
-const VALID_TOKEN = 'mock-access-token-abc123';
+const VALID_TOKENS = {
+  'master-app': 'mock-access-token-abc123',
+  'slave-client': 'mock-slave-token-xyz789',
+};
 
-// 模拟登录页面（简化版，直接返回表单）
+// 内存 session
+const sessions = {};
+
+function parseCookies(cookieHeader) {
+  const cookies = {};
+  if (cookieHeader) {
+    cookieHeader.split(';').forEach((c) => {
+      const idx = c.indexOf('=');
+      if (idx > 0) {
+        cookies[c.slice(0, idx).trim()] = c.slice(idx + 1).trim();
+      }
+    });
+  }
+  return cookies;
+}
+
+function getUserInfo(token) {
+  if (token === VALID_TOKENS['master-app']) {
+    return {
+      sub: '10001',
+      name: '管理员',
+      username: 'admin',
+      email: 'admin@example.com',
+    };
+  }
+  if (token === VALID_TOKENS['slave-client']) {
+    return {
+      sub: '10001',
+      name: '管理员',
+      username: 'admin',
+      email: 'admin@example.com',
+    };
+  }
+  return null;
+}
+
+// OAuth2 授权端点 — GET
 app.get('/oauth/authorize', (req, res) => {
   const { client_id, redirect_uri, response_type, state } = req.query;
 
@@ -20,11 +62,21 @@ app.get('/oauth/authorize', (req, res) => {
     return res.status(400).send('unsupported_response_type');
   }
 
-  if (client_id !== CLIENT_ID) {
+  if (!CLIENTS[client_id]) {
     return res.status(400).send('invalid_client');
   }
 
-  // 返回登录表单 HTML
+  const cookies = parseCookies(req.headers.cookie || '');
+
+  // 已有 session → 自动放行（SSO）
+  if (cookies.sso_session && sessions[cookies.sso_session]) {
+    const redirectUrl = new URL(redirect_uri);
+    redirectUrl.searchParams.set('code', VALID_CODE);
+    if (state) redirectUrl.searchParams.set('state', state);
+    return res.redirect(redirectUrl.toString());
+  }
+
+  // 无 session → 显示登录表单
   res.send(`
 <!DOCTYPE html>
 <html>
@@ -59,6 +111,7 @@ app.get('/oauth/authorize', (req, res) => {
   `);
 });
 
+// OAuth2 授权端点 — POST（登录表单提交）
 app.post('/oauth/authorize', (req, res) => {
   const { client_id, redirect_uri, state, username, password } = req.body;
 
@@ -66,25 +119,37 @@ app.post('/oauth/authorize', (req, res) => {
     return res.status(401).send('用户名或密码错误');
   }
 
+  // 创建 session
+  const sessionId = crypto.randomUUID();
+  sessions[sessionId] = { username, loggedInAt: Date.now() };
+
   const redirectUrl = new URL(redirect_uri);
   redirectUrl.searchParams.set('code', VALID_CODE);
-  if (state) {
-    redirectUrl.searchParams.set('state', state);
-  }
+  if (state) redirectUrl.searchParams.set('state', state);
 
+  res.cookie('sso_session', sessionId, {
+    httpOnly: true,
+    sameSite: 'lax',
+    maxAge: 24 * 60 * 60 * 1000, // 24h
+  });
   res.redirect(redirectUrl.toString());
 });
 
 // Token 端点
 app.post('/oauth/token', (req, res) => {
-  const { grant_type, code, client_id, redirect_uri } = req.body;
+  const { grant_type, code, client_id, client_secret, redirect_uri } = req.body;
 
   if (grant_type !== 'authorization_code') {
     return res.status(400).json({ error: 'unsupported_grant_type' });
   }
 
-  if (client_id !== CLIENT_ID) {
+  const client = CLIENTS[client_id];
+  if (!client) {
     return res.status(400).json({ error: 'invalid_client' });
+  }
+
+  if (client_secret !== client.secret) {
+    return res.status(400).json({ error: 'invalid_client_secret' });
   }
 
   if (code !== VALID_CODE) {
@@ -92,14 +157,14 @@ app.post('/oauth/token', (req, res) => {
   }
 
   res.json({
-    access_token: VALID_TOKEN,
+    access_token: VALID_TOKENS[client_id],
     token_type: 'Bearer',
     expires_in: 3600,
-    refresh_token: 'mock-refresh-token-xyz789',
+    refresh_token: `refresh-${client_id}-xyz789`,
   });
 });
 
-// 获取用户信息（可选）
+// 获取用户信息
 app.get('/oauth/userinfo', (req, res) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -107,20 +172,27 @@ app.get('/oauth/userinfo', (req, res) => {
   }
 
   const token = authHeader.slice(7);
-  if (token !== VALID_TOKEN) {
+  const userInfo = getUserInfo(token);
+  if (!userInfo) {
     return res.status(401).json({ error: 'invalid_token' });
   }
 
-  res.json({
-    sub: '10001',
-    name: '管理员',
-    username: 'admin',
-    email: 'admin@example.com',
-  });
+  res.json(userInfo);
+});
+
+// 登出
+app.post('/oauth/logout', (req, res) => {
+  const cookies = parseCookies(req.headers.cookie || '');
+  if (cookies.sso_session) {
+    delete sessions[cookies.sso_session];
+  }
+  res.clearCookie('sso_session');
+  res.json({ ok: true });
 });
 
 app.listen(PORT, () => {
   console.log(`OAuth2 模拟服务端已启动: http://localhost:${PORT}`);
   console.log(`授权端点: http://localhost:${PORT}/oauth/authorize`);
   console.log(`Token 端点: http://localhost:${PORT}/oauth/token`);
+  console.log(`支持的客户端: ${Object.keys(CLIENTS).join(', ')}`);
 });

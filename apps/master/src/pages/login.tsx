@@ -7,14 +7,13 @@ export default function LoginPage() {
   useEffect(() => {
     if (isLoggedIn()) {
       history.push('/');
+      return;
     }
-  }, []);
 
-  const handleLogin = () => {
     const redirectUri = `${window.location.origin}/callback`;
     const authorizeUrl = getAuthorizeUrl(redirectUri);
     window.location.href = authorizeUrl;
-  };
+  }, []);
 
   return (
     <div style={{
@@ -32,29 +31,8 @@ export default function LoginPage() {
         width: 360,
         textAlign: 'center',
       }}>
-        <h1 style={{ marginTop: 0, color: '#333' }}>主应用登录</h1>
-        <p style={{ color: '#666' }}>点击按钮通过 OAuth2 授权登录</p>
-
-        <button
-          onClick={handleLogin}
-          style={{
-            width: '100%',
-            padding: 14,
-            background: '#1890ff',
-            color: 'white',
-            border: 'none',
-            borderRadius: 4,
-            cursor: 'pointer',
-            fontSize: 16,
-            marginTop: 20,
-          }}
-        >
-          OAuth2 登录
-        </button>
-
-        <p style={{ color: '#999', fontSize: 12, marginTop: 20 }}>
-          测试账号: admin / 123456
-        </p>
+        <h1 style={{ marginTop: 0, color: '#333' }}>正在跳转到 OAuth2 登录...</h1>
+        <p style={{ color: '#666' }}>如果未自动跳转，请使用测试账号 admin / 123456</p>
       </div>
     </div>
   );

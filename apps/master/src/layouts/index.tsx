@@ -1,16 +1,25 @@
 import { useEffect, useState } from 'react';
 import { Link, Outlet, useLocation } from 'umi';
-import { getUserInfo, logout } from '@/utils/auth';
+import { getUserInfo, logout, getAppConfig } from '@/utils/auth';
 
 const menuItems = [
   { key: 'home', label: '首页', path: '/' },
   { key: 'slave', label: '子应用', path: '/slave' },
 ];
 
+const slaveSubItems = [
+  { label: '子应用首页', path: '/' },
+  { label: '列表页', path: '/list' },
+  { label: '详情页', path: '/detail?id=1' },
+];
+
 export default function Layout() {
   const location = useLocation();
   const [activeKey, setActiveKey] = useState('home');
   const userInfo = getUserInfo();
+  const { tenantName: initialTenant, projectSpace: initialProject } = getAppConfig();
+  const [tenantName, setTenantName] = useState(initialTenant);
+  const [projectSpace, setProjectSpace] = useState(initialProject);
 
   useEffect(() => {
     const current = menuItems.find((item) =>
@@ -20,6 +29,20 @@ export default function Layout() {
       setActiveKey(current.key);
     }
   }, [location.pathname]);
+
+  useEffect(() => {
+    const onConfigUpdate = () => {
+      const cfg = getAppConfig();
+      setTenantName(cfg.tenantName);
+      setProjectSpace(cfg.projectSpace);
+    };
+    window.addEventListener('app-config-update', onConfigUpdate);
+    return () => window.removeEventListener('app-config-update', onConfigUpdate);
+  }, []);
+
+  const navigateSlave = (path: string) => {
+    window.dispatchEvent(new CustomEvent('master-nav-to', { detail: { path } }));
+  };
 
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'Arial, sans-serif' }}>
@@ -33,8 +56,11 @@ export default function Layout() {
           flexDirection: 'column',
         }}
       >
-        <div style={{ padding: '20px 16px', fontSize: 18, fontWeight: 'bold', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+        <div style={{ padding: '20px 16px 4px', fontSize: 18, fontWeight: 'bold', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
           主应用菜单
+        </div>
+        <div style={{ padding: '8px 16px 16px', fontSize: 12, color: 'rgba(255,255,255,0.45)', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+          {tenantName} / {projectSpace}
         </div>
         <nav style={{ flex: 1, paddingTop: 8 }}>
           {menuItems.map((item) => (
@@ -54,6 +80,28 @@ export default function Layout() {
               {item.label}
             </Link>
           ))}
+          {/* 子应用内部页面子菜单 */}
+          {activeKey === 'slave' && (
+            <div style={{ paddingLeft: 12 }}>
+              {slaveSubItems.map((sub) => (
+                <div
+                  key={sub.path}
+                  onClick={() => navigateSlave(sub.path)}
+                  style={{
+                    padding: '10px 24px',
+                    color: 'rgba(255,255,255,0.45)',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    transition: 'all 0.3s',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = 'rgba(255,255,255,0.85)'; e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = 'rgba(255,255,255,0.45)'; e.currentTarget.style.background = 'transparent'; }}
+                >
+                  {sub.label}
+                </div>
+              ))}
+            </div>
+          )}
         </nav>
         <div style={{ padding: '16px 24px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
           {userInfo && (
